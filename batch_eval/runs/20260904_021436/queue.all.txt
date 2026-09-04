@@ -1,0 +1,10 @@
+blocks_ranking_size	demo_randomized
+blocks_ranking_rgb	demo_randomized
+blocks_ranking_size	demo_clean
+blocks_ranking_rgb	demo_clean
+beat_block_hammer	demo_randomized
+click_alarmclock	demo_randomized
+click_bell	demo_randomized
+beat_block_hammer	demo_clean
+click_alarmclock	demo_clean
+click_bell	demo_clean

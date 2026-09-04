@@ -1,0 +1,8 @@
+# Run artifacts: keep the per-run record (status.tsv, progress.log, queue/args),
+# drop the streamed logs, lock files and the mutable "latest" symlink.
+.omc/
+boot.log
+runs/latest
+runs/*/logs/
+runs/*/queue.lock
+runs/*/queue.txt

@@ -1,0 +1,2 @@
+--task_config=demo_clean
+--test_num=50
