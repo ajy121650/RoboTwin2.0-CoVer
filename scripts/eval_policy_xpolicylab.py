@@ -145,12 +145,50 @@ def checkpoint_result_subdir(ckpt_setting: Any) -> Path:
     return Path(*safe_parts) if safe_parts else Path("default")
 
 
+def resolve_rephrase_pool(args: dict[str, Any], instruction_type: str | None) -> str:
+    """Which instruction lists the rephrasings are drawn from.
+
+    "auto" keeps an unscaled run reading exactly the split eval_instruction names,
+    so baselines stay comparable, and widens to both lists once more than one
+    rephrasing is requested -- the point of scaling is to vary the wording.
+    """
+    pool = str(args.get("rephrase_pool", "auto") or "auto").lower()
+    if pool != "auto":
+        return pool
+    return (instruction_type or "seen") if resolve_rephrase_num(args) == 1 else "both"
+
+
+def resolve_rephrase_num(args: dict[str, Any]) -> int:
+    try:
+        return max(1, int(args.get("rephrase_num", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def build_run_tag(args: dict[str, Any], instruction_type: str | None, seed: Any, test_num: int) -> str:
+    """Stem that distinguishes runs of the same task/checkpoint from each other.
+
+    Directory listings are the primary index for these rollouts, so the knobs that
+    change what was executed belong in the name rather than in a file inside it.
+    """
+    return "-".join(
+        (
+            f"seed{seed}",
+            f"reph{resolve_rephrase_num(args)}",
+            resolve_rephrase_pool(args, instruction_type),
+            f"sel-{str(args.get('rephrase_select', 'random') or 'random').lower()}",
+            f"ep{test_num}",
+        )
+    )
+
+
 def build_eval_save_dir(
     task_name: str,
     policy_name: str,
     task_config: str,
     ckpt_setting: Any,
     current_time: str,
+    run_tag: str = "",
 ) -> Path:
     return (
         Path("eval_result")
@@ -158,7 +196,7 @@ def build_eval_save_dir(
         / policy_name
         / task_config
         / checkpoint_result_subdir(ckpt_setting)
-        / current_time
+        / (f"{run_tag}_{current_time}" if run_tag else current_time)
     )
 
 
@@ -283,8 +321,15 @@ def main(usr_args: dict[str, Any]) -> None:
     args["eval_instruction"] = instruction_type
     usr_args["instruction_type"] = instruction_type
 
+    args["rephrase_num"] = resolve_rephrase_num(usr_args)
+    args["rephrase_pool"] = usr_args.get("rephrase_pool", "auto")
+    args["rephrase_select"] = usr_args.get("rephrase_select", "random")
+
     save_dir = build_eval_save_dir(
-        task_name, policy_name, task_config, ckpt_setting, current_time
+        task_name, policy_name, task_config, ckpt_setting, current_time,
+        run_tag=build_run_tag(
+            args, instruction_type, usr_args.get("seed", 0), int(usr_args.get("test_num") or 100)
+        ),
     )
     save_dir.mkdir(parents=True, exist_ok=True)
     video_size = None
@@ -347,8 +392,15 @@ def main_batch(usr_args: dict[str, Any]) -> None:
     args["eval_instruction"] = instruction_type
     usr_args["instruction_type"] = instruction_type
 
+    args["rephrase_num"] = resolve_rephrase_num(usr_args)
+    args["rephrase_pool"] = usr_args.get("rephrase_pool", "auto")
+    args["rephrase_select"] = usr_args.get("rephrase_select", "random")
+
     save_dir = build_eval_save_dir(
-        task_name, policy_name, task_config, ckpt_setting, current_time
+        task_name, policy_name, task_config, ckpt_setting, current_time,
+        run_tag=build_run_tag(
+            args, instruction_type, usr_args.get("seed", 0), int(usr_args.get("test_num") or 100)
+        ),
     )
     save_dir.mkdir(parents=True, exist_ok=True)
     video_size = None
@@ -657,7 +709,8 @@ def run_one_batch_episode(
         print(f"skip unstable seed={seed_value} (eval setup)")
         return {"type": "seed_skipped", "worker_id": worker_id, "seed": seed_value, "reason": "unstable"}
 
-    instruction = build_instruction(args, episode_info, instruction_type, test_num)
+    instruction_set = build_instruction_set(args, episode_info, instruction_type, test_num)
+    instruction = instruction_set[0]
     task_env.set_instruction(instruction=instruction)
 
     if task_env.eval_video_path is not None:
@@ -698,6 +751,7 @@ def run_one_batch_episode(
             xpl_obs = robotwin_obs_to_xpolicylab(
                 observation,
                 instruction=task_env.get_instruction(),
+                instructions=instruction_set,
                 env_idx=worker_id,
                 frequency=frequency,
                 task_env=task_env,
@@ -725,6 +779,7 @@ def run_one_batch_episode(
                 xpl_obs = robotwin_obs_to_xpolicylab(
                     observation,
                     instruction=task_env.get_instruction(),
+                    instructions=instruction_set,
                     env_idx=worker_id,
                     frequency=frequency,
                     task_env=task_env,
@@ -841,7 +896,8 @@ def eval_remote_policy(
 
         succ_seed += 1
 
-        instruction = build_instruction(args, episode_info, instruction_type, test_num)
+        instruction_set = build_instruction_set(args, episode_info, instruction_type, test_num)
+        instruction = instruction_set[0]
         task_env.set_instruction(instruction=instruction)
 
         if task_env.eval_video_path is not None:
@@ -884,6 +940,7 @@ def eval_remote_policy(
                 xpl_obs = robotwin_obs_to_xpolicylab(
                     observation,
                     instruction=task_env.get_instruction(),
+                    instructions=instruction_set,
                     env_idx=0,
                     frequency=frequency,
                     task_env=task_env,
@@ -912,6 +969,7 @@ def eval_remote_policy(
                     xpl_obs = robotwin_obs_to_xpolicylab(
                         observation,
                         instruction=task_env.get_instruction(),
+                        instructions=instruction_set,
                         env_idx=0,
                         frequency=frequency,
                         task_env=task_env,
@@ -974,20 +1032,40 @@ def eval_remote_policy(
     return now_seed, task_env.suc
 
 
-def build_instruction(args: dict[str, Any], episode_info: dict[str, Any], instruction_type: str | None, test_num: int) -> str:
+def build_instruction_set(
+    args: dict[str, Any], episode_info: dict[str, Any], instruction_type: str | None, test_num: int
+) -> list[str]:
+    """Sample the rephrasings this episode runs with.
+
+    Entry 0 is what gets recorded on the env and in the logs; the policy turns the
+    whole list into one action chunk each. rephrase_num == 1 reproduces the former
+    single-instruction behaviour exactly.
+    """
+    fallback = [args["task_name"]]
     if not instruction_type:
-        return args["task_name"]
+        return fallback
+
+    rephrase_num = resolve_rephrase_num(args)
+    pool_name = resolve_rephrase_pool(args, instruction_type)
 
     try:
         episode_info_list = [episode_info.get("info", {})]
-        results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
-        candidates = results[0].get(instruction_type)
-        if candidates:
-            return np.random.choice(candidates)
+        results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)[0]
+        keys = ("seen", "unseen") if pool_name == "both" else (pool_name,)
+        # dict.fromkeys keeps generation order while dropping the repeats that arise
+        # because the generator cycles its templates to reach the requested count.
+        pool = list(dict.fromkeys(c for key in keys for c in (results.get(key) or [])))
+        if not pool:
+            return fallback
+
+        picked = [str(x) for x in np.random.choice(pool, size=min(rephrase_num, len(pool)), replace=False)]
+        while len(picked) < rephrase_num:  # asked for more rephrasings than exist
+            picked.append(str(np.random.choice(pool)))
+        return picked
     except Exception:
         print("Failed to generate episode instruction; using task name as instruction.")
 
-    return args["task_name"]
+    return fallback
 
 
 def reset_policy(model_client) -> None:
@@ -1038,15 +1116,19 @@ def robotwin_obs_to_xpolicylab(
     observation: Mapping[str, Any],
     *,
     instruction: str | None = None,
+    instructions: Sequence[str] | None = None,
     env_idx: int = 0,
     frequency: int = 30,
     task_env: Any | None = None,
 ) -> dict[str, Any]:
     instruction_text = instruction or observation.get("language") or ""
+    prompt_set = [str(x) for x in (instructions or []) if x]
+    if not prompt_set and instruction_text:
+        prompt_set = [instruction_text]
     return {
         "data_format_version": "v1.0",
         "instruction": instruction_text,
-        "instructions": [instruction_text] if instruction_text else [],
+        "instructions": prompt_set,
         "env_idx": int(env_idx),
         "vision": convert_vision(observation),
         "state": convert_state(observation, task_env=task_env),
@@ -1347,6 +1429,28 @@ def parse_args() -> dict[str, Any]:
     parser.add_argument("--frequency", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--max_seed_attempts", type=int, default=None)
+    parser.add_argument(
+        "--rephrase_num",
+        type=int,
+        default=None,
+        help="Rephrasings sampled per episode. The policy produces one action chunk per "
+             "rephrasing and keeps one of them, so this is the test-time scaling factor "
+             "and it multiplies inference cost. 1 (default) is the unscaled baseline.",
+    )
+    parser.add_argument(
+        "--rephrase_pool",
+        choices=("auto", "seen", "unseen", "both"),
+        default=None,
+        help="Instruction lists the rephrasings are drawn from. 'auto' (default) reads the "
+             "eval_instruction split when --rephrase_num is 1, and both lists above that.",
+    )
+    parser.add_argument(
+        "--rephrase_select",
+        choices=("random",),
+        default=None,
+        help="How the executed chunk is picked from the candidates. Only uniform random "
+             "for now; a verifier-scored rule would slot in here.",
+    )
     args = parser.parse_args()
 
     usr_args: dict[str, Any] = {
@@ -1376,6 +1480,12 @@ def parse_args() -> dict[str, Any]:
         usr_args["num_workers"] = args.num_workers
     if args.max_seed_attempts is not None:
         usr_args["max_seed_attempts"] = args.max_seed_attempts
+    if args.rephrase_num is not None:
+        usr_args["rephrase_num"] = args.rephrase_num
+    if args.rephrase_pool is not None:
+        usr_args["rephrase_pool"] = args.rephrase_pool
+    if args.rephrase_select is not None:
+        usr_args["rephrase_select"] = args.rephrase_select
 
     usr_args.update(parse_additional_info(args.additional_info))
     usr_args.setdefault("ckpt_setting", usr_args.get("ckpt_name"))
