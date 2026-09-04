@@ -165,6 +165,14 @@ def resolve_rephrase_num(args: dict[str, Any]) -> int:
         return 1
 
 
+def resolve_batch_inference_size(args: dict[str, Any]) -> int:
+    """Action samples drawn per rephrasing, all in one batched forward pass."""
+    try:
+        return max(1, int(args.get("policy_batch_inference_size", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def build_run_tag(args: dict[str, Any], instruction_type: str | None, seed: Any, test_num: int) -> str:
     """Stem that distinguishes runs of the same task/checkpoint from each other.
 
@@ -175,6 +183,7 @@ def build_run_tag(args: dict[str, Any], instruction_type: str | None, seed: Any,
         (
             f"seed{seed}",
             f"reph{resolve_rephrase_num(args)}",
+            f"samp{resolve_batch_inference_size(args)}",
             resolve_rephrase_pool(args, instruction_type),
             f"sel-{str(args.get('rephrase_select', 'random') or 'random').lower()}",
             f"ep{test_num}",
@@ -324,6 +333,7 @@ def main(usr_args: dict[str, Any]) -> None:
     args["rephrase_num"] = resolve_rephrase_num(usr_args)
     args["rephrase_pool"] = usr_args.get("rephrase_pool", "auto")
     args["rephrase_select"] = usr_args.get("rephrase_select", "random")
+    args["policy_batch_inference_size"] = resolve_batch_inference_size(usr_args)
 
     save_dir = build_eval_save_dir(
         task_name, policy_name, task_config, ckpt_setting, current_time,
@@ -395,6 +405,7 @@ def main_batch(usr_args: dict[str, Any]) -> None:
     args["rephrase_num"] = resolve_rephrase_num(usr_args)
     args["rephrase_pool"] = usr_args.get("rephrase_pool", "auto")
     args["rephrase_select"] = usr_args.get("rephrase_select", "random")
+    args["policy_batch_inference_size"] = resolve_batch_inference_size(usr_args)
 
     save_dir = build_eval_save_dir(
         task_name, policy_name, task_config, ckpt_setting, current_time,
@@ -711,6 +722,7 @@ def run_one_batch_episode(
 
     instruction_set = build_instruction_set(args, episode_info, instruction_type, test_num)
     instruction = instruction_set[0]
+    samples_per_prompt = resolve_batch_inference_size(args)
     task_env.set_instruction(instruction=instruction)
 
     if task_env.eval_video_path is not None:
@@ -752,6 +764,7 @@ def run_one_batch_episode(
                 observation,
                 instruction=task_env.get_instruction(),
                 instructions=instruction_set,
+                samples_per_prompt=samples_per_prompt,
                 env_idx=worker_id,
                 frequency=frequency,
                 task_env=task_env,
@@ -780,6 +793,7 @@ def run_one_batch_episode(
                     observation,
                     instruction=task_env.get_instruction(),
                     instructions=instruction_set,
+                    samples_per_prompt=samples_per_prompt,
                     env_idx=worker_id,
                     frequency=frequency,
                     task_env=task_env,
@@ -898,6 +912,7 @@ def eval_remote_policy(
 
         instruction_set = build_instruction_set(args, episode_info, instruction_type, test_num)
         instruction = instruction_set[0]
+        samples_per_prompt = resolve_batch_inference_size(args)
         task_env.set_instruction(instruction=instruction)
 
         if task_env.eval_video_path is not None:
@@ -941,6 +956,7 @@ def eval_remote_policy(
                     observation,
                     instruction=task_env.get_instruction(),
                     instructions=instruction_set,
+                    samples_per_prompt=samples_per_prompt,
                     env_idx=0,
                     frequency=frequency,
                     task_env=task_env,
@@ -970,6 +986,7 @@ def eval_remote_policy(
                         observation,
                         instruction=task_env.get_instruction(),
                         instructions=instruction_set,
+                        samples_per_prompt=samples_per_prompt,
                         env_idx=0,
                         frequency=frequency,
                         task_env=task_env,
@@ -1117,6 +1134,7 @@ def robotwin_obs_to_xpolicylab(
     *,
     instruction: str | None = None,
     instructions: Sequence[str] | None = None,
+    samples_per_prompt: int = 1,
     env_idx: int = 0,
     frequency: int = 30,
     task_env: Any | None = None,
@@ -1132,7 +1150,10 @@ def robotwin_obs_to_xpolicylab(
         "env_idx": int(env_idx),
         "vision": convert_vision(observation),
         "state": convert_state(observation, task_env=task_env),
-        "additional_info": {"frequency": int(frequency)},
+        "additional_info": {
+            "frequency": int(frequency),
+            "policy_batch_inference_size": int(samples_per_prompt),
+        },
     }
 
 
@@ -1445,6 +1466,14 @@ def parse_args() -> dict[str, Any]:
              "eval_instruction split when --rephrase_num is 1, and both lists above that.",
     )
     parser.add_argument(
+        "--policy_batch_inference_size",
+        type=int,
+        default=None,
+        help="Action samples drawn per rephrasing. Candidates per step are "
+             "rephrase_num * this, produced by one batched forward pass; the repeats "
+             "differ because pi0 samples its flow-matching noise per batch element.",
+    )
+    parser.add_argument(
         "--rephrase_select",
         choices=("random",),
         default=None,
@@ -1486,6 +1515,8 @@ def parse_args() -> dict[str, Any]:
         usr_args["rephrase_pool"] = args.rephrase_pool
     if args.rephrase_select is not None:
         usr_args["rephrase_select"] = args.rephrase_select
+    if args.policy_batch_inference_size is not None:
+        usr_args["policy_batch_inference_size"] = args.policy_batch_inference_size
 
     usr_args.update(parse_additional_info(args.additional_info))
     usr_args.setdefault("ckpt_setting", usr_args.get("ckpt_name"))
