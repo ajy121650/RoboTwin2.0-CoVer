@@ -29,3 +29,7 @@ envs/curobo/*
 
 /*.json*
 /*.txt
+
+# OMC operational state
+.omc/
+**/.omc/
