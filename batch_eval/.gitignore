@@ -9,6 +9,7 @@ runs/*/queue.txt
 runs/latest
 
 boot.log
+sweep_boot.log
 .omc/
 
 # Working notes, not part of the repo.
