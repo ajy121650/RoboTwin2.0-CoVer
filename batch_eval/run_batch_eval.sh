@@ -17,10 +17,21 @@ ENV_CFG=aloha_agilex
 ACTION=joint
 SEED=0
 EPISODES="${EPISODES:-50}"
+# Test-time scaling knobs: candidates per step are REPHRASE_NUM * SAMPLES, produced
+# by one batched forward pass. 1 and 1 is the unscaled baseline.
+REPHRASE_NUM="${REPHRASE_NUM:-1}"
+SAMPLES="${SAMPLES:-1}"
+# The policy server and the simulator share a card. JAX preallocates this fraction;
+# 0.3 is only enough for one action sample, and a server that runs out answers
+# get_action with RESOURCE_EXHAUSTED, which the rollout counts as a failed episode.
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.3}"
+# One entry per concurrent job. "N" runs the policy server and the simulator both on
+# card N; "P:E" splits them, which is what test-time scaling needs once the policy no
+# longer fits alongside a simulator. "0:1 2:3" therefore runs two jobs, not four.
 read -r -a GPUS <<< "${GPUS_OVERRIDE:-0 1 2 3}"
 STAGGER="${STAGGER:-15}"
 
-RUN_DIR="${ROBOTWIN_ROOT}/batch_eval/runs/$(date +%Y%m%d_%H%M%S)"
+RUN_DIR="${ROBOTWIN_ROOT}/batch_eval/runs/reph${REPHRASE_NUM}-samp${SAMPLES}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${RUN_DIR}/logs" "${RUN_DIR}/args"
 ln -sfn "${RUN_DIR}" "${ROBOTWIN_ROOT}/batch_eval/runs/latest"
 
@@ -56,7 +67,10 @@ pop_job() {
 }
 
 worker() {
-    local gpu=$1 job task cfg label argsf t0 t1 rc res
+    local slot=$1 job task cfg label argsf t0 t1 rc res
+    local policy_gpu="${slot%%:*}"
+    local env_gpu="${slot##*:}"
+    local gpu="${slot//:/+}"          # label only; keeps log lines and status.tsv readable
     while :; do
         job=$(pop_job)
         [[ -z "${job}" ]] && break
@@ -64,8 +78,9 @@ worker() {
         cfg=$(cut -f2 <<< "${job}")
         label="${task}__${cfg}"
         argsf="${RUN_DIR}/args/${label}.txt"
-        # eval.sh exposes neither of these; eval_policy.sh appends them from this file.
-        printf -- '--task_config=%s\n--test_num=%s\n' "${cfg}" "${EPISODES}" > "${argsf}"
+        # eval.sh exposes none of these; eval_policy.sh appends them from this file.
+        printf -- '--task_config=%s\n--test_num=%s\n--rephrase_num=%s\n--policy_batch_inference_size=%s\n' \
+            "${cfg}" "${EPISODES}" "${REPHRASE_NUM}" "${SAMPLES}" > "${argsf}"
 
         t0=$(date +%s)
         log "GPU${gpu} START ${label}"
@@ -75,7 +90,7 @@ worker() {
             export CUDA_HOME=/usr/local/cuda
             export PYTHONUNBUFFERED=1
             bash eval.sh RoboTwin "${task}" "${CKPT}" "${ENV_CFG}" "${ACTION}" \
-                "${SEED}" "${gpu}" "${gpu}" uv RoboTwin
+                "${SEED}" "${policy_gpu}" "${env_gpu}" uv RoboTwin
         ) > "${RUN_DIR}/logs/${label}.log" 2>&1
         rc=$?
         t1=$(date +%s)
@@ -91,8 +106,10 @@ worker() {
 
 log "run dir ${RUN_DIR}"
 log "gpus=${GPUS[*]} episodes=${EPISODES} jobs=$(wc -l < "${RUN_DIR}/queue.all.txt")"
-for gpu in "${GPUS[@]}"; do
-    worker "${gpu}" &
+log "rephrase=${REPHRASE_NUM} samples=${SAMPLES} -> $((REPHRASE_NUM * SAMPLES)) candidates/step"
+log "XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION}"
+for slot in "${GPUS[@]}"; do
+    worker "${slot}" &
     sleep "${STAGGER}"   # avoid free-port races and 4 simultaneous JAX inits
 done
 wait

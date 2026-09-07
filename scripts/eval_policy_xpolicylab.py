@@ -148,14 +148,16 @@ def checkpoint_result_subdir(ckpt_setting: Any) -> Path:
 def resolve_rephrase_pool(args: dict[str, Any], instruction_type: str | None) -> str:
     """Which instruction lists the rephrasings are drawn from.
 
-    "auto" keeps an unscaled run reading exactly the split eval_instruction names,
-    so baselines stay comparable, and widens to both lists once more than one
-    rephrasing is requested -- the point of scaling is to vary the wording.
+    "auto" follows the split's own eval_instruction at every rephrase count, so
+    demo_randomized draws only from unseen no matter how many rephrasings are asked
+    for. An earlier version widened to both lists above one rephrasing, which quietly
+    fed seen phrasings into the held-out split and made scaled Hard runs easier than
+    the unscaled ones they were compared against. Pass "both" explicitly to widen.
     """
     pool = str(args.get("rephrase_pool", "auto") or "auto").lower()
     if pool != "auto":
         return pool
-    return (instruction_type or "seen") if resolve_rephrase_num(args) == 1 else "both"
+    return instruction_type or "seen"
 
 
 def resolve_rephrase_num(args: dict[str, Any]) -> int:
