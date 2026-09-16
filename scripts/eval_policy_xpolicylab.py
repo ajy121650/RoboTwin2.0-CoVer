@@ -175,6 +175,25 @@ def resolve_batch_inference_size(args: dict[str, Any]) -> int:
         return 1
 
 
+def resolve_step_limit_scale(args: dict[str, Any]) -> float:
+    """Multiplier applied to the task's own eval step limit.
+
+    A failed episode always runs to the limit, so raising it only helps where
+    successes already crowd it -- blocks_ranking_* succeed as late as 99% of theirs,
+    while click_alarmclock never needs more than 18%.
+    """
+    try:
+        return max(0.1, float(args.get("step_limit_scale", 1.0) or 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def apply_step_limit_scale(task_env, args: dict[str, Any]) -> None:
+    scale = resolve_step_limit_scale(args)
+    if scale != 1.0 and getattr(task_env, "step_lim", None):
+        task_env.step_lim = int(round(task_env.step_lim * scale))
+
+
 def build_run_tag(args: dict[str, Any], instruction_type: str | None, seed: Any, test_num: int) -> str:
     """Stem that distinguishes runs of the same task/checkpoint from each other.
 
@@ -188,6 +207,8 @@ def build_run_tag(args: dict[str, Any], instruction_type: str | None, seed: Any,
             f"samp{resolve_batch_inference_size(args)}",
             resolve_rephrase_pool(args, instruction_type),
             f"sel-{str(args.get('rephrase_select', 'random') or 'random').lower()}",
+            *((f"merge-{str(args['merge_mode']).lower()}",) if args.get("merge_mode") else ()),
+            *((f"lim{resolve_step_limit_scale(args):g}x",) if resolve_step_limit_scale(args) != 1.0 else ()),
             f"ep{test_num}",
         )
     )
@@ -336,6 +357,8 @@ def main(usr_args: dict[str, Any]) -> None:
     args["rephrase_pool"] = usr_args.get("rephrase_pool", "auto")
     args["rephrase_select"] = usr_args.get("rephrase_select", "random")
     args["policy_batch_inference_size"] = resolve_batch_inference_size(usr_args)
+    args["step_limit_scale"] = resolve_step_limit_scale(usr_args)
+    args["merge_mode"] = usr_args.get("merge_mode")
 
     save_dir = build_eval_save_dir(
         task_name, policy_name, task_config, ckpt_setting, current_time,
@@ -408,6 +431,8 @@ def main_batch(usr_args: dict[str, Any]) -> None:
     args["rephrase_pool"] = usr_args.get("rephrase_pool", "auto")
     args["rephrase_select"] = usr_args.get("rephrase_select", "random")
     args["policy_batch_inference_size"] = resolve_batch_inference_size(usr_args)
+    args["step_limit_scale"] = resolve_step_limit_scale(usr_args)
+    args["merge_mode"] = usr_args.get("merge_mode")
 
     save_dir = build_eval_save_dir(
         task_name, policy_name, task_config, ckpt_setting, current_time,
@@ -693,6 +718,7 @@ def run_one_batch_episode(
     if expert_check:
         try:
             task_env.setup_demo(now_ep_num=local_episode_id, seed=seed_value, is_test=True, **args)
+            apply_step_limit_scale(task_env, args)
             episode_info = task_env.play_once()
             task_env.close_env()
         except UnStableError:
@@ -717,6 +743,7 @@ def run_one_batch_episode(
     args["render_freq"] = render_freq
     try:
         task_env.setup_demo(now_ep_num=episode_id, seed=seed_value, is_test=True, **args)
+        apply_step_limit_scale(task_env, args)
     except UnStableError:
         safe_close_env(task_env)
         print(f"skip unstable seed={seed_value} (eval setup)")
@@ -725,6 +752,7 @@ def run_one_batch_episode(
     instruction_set = build_instruction_set(args, episode_info, instruction_type, test_num)
     instruction = instruction_set[0]
     samples_per_prompt = resolve_batch_inference_size(args)
+    merge_mode = args.get("merge_mode")
     task_env.set_instruction(instruction=instruction)
 
     if task_env.eval_video_path is not None:
@@ -767,6 +795,8 @@ def run_one_batch_episode(
                 instruction=task_env.get_instruction(),
                 instructions=instruction_set,
                 samples_per_prompt=samples_per_prompt,
+                merge_mode=merge_mode,
+                task_config=args.get("task_config"),
                 env_idx=worker_id,
                 frequency=frequency,
                 task_env=task_env,
@@ -796,6 +826,8 @@ def run_one_batch_episode(
                     instruction=task_env.get_instruction(),
                     instructions=instruction_set,
                     samples_per_prompt=samples_per_prompt,
+                    merge_mode=merge_mode,
+                    task_config=args.get("task_config"),
                     env_idx=worker_id,
                     frequency=frequency,
                     task_env=task_env,
@@ -813,7 +845,13 @@ def run_one_batch_episode(
 
     notify_trial_end(model_client, task_name, seed_value, succ)
 
-    task_env.close_env()
+    # The batch path used to close without ever clearing SAPIEN's resource cache, so a
+    # randomized run -- which loads a fresh background texture every episode -- grew its
+    # renderer memory monotonically until the card could not allocate a render buffer.
+    # The single-episode path already does this; clear_cache_freq comes from the task
+    # config and is what that path uses too.
+    clear_cache_freq = int(args.get("clear_cache_freq", 0) or 0)
+    task_env.close_env(clear_cache=bool(clear_cache_freq) and (episode_id + 1) % clear_cache_freq == 0)
     if task_env.render_freq:
         task_env.viewer.close()
 
@@ -876,6 +914,7 @@ def eval_remote_policy(
         if expert_check:
             try:
                 task_env.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
+                apply_step_limit_scale(task_env, args)
                 episode_info = task_env.play_once()
                 task_env.close_env()
             except UnStableError:
@@ -899,6 +938,7 @@ def eval_remote_policy(
         args["render_freq"] = render_freq
         try:
             task_env.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
+            apply_step_limit_scale(task_env, args)
         except UnStableError:
             safe_close_env(task_env)
             print(f"skip unstable seed={now_seed} (eval setup)")
@@ -915,6 +955,7 @@ def eval_remote_policy(
         instruction_set = build_instruction_set(args, episode_info, instruction_type, test_num)
         instruction = instruction_set[0]
         samples_per_prompt = resolve_batch_inference_size(args)
+        merge_mode = args.get("merge_mode")
         task_env.set_instruction(instruction=instruction)
 
         if task_env.eval_video_path is not None:
@@ -959,6 +1000,8 @@ def eval_remote_policy(
                     instruction=task_env.get_instruction(),
                     instructions=instruction_set,
                     samples_per_prompt=samples_per_prompt,
+                    merge_mode=merge_mode,
+                    task_config=args.get("task_config"),
                     env_idx=0,
                     frequency=frequency,
                     task_env=task_env,
@@ -989,6 +1032,8 @@ def eval_remote_policy(
                         instruction=task_env.get_instruction(),
                         instructions=instruction_set,
                         samples_per_prompt=samples_per_prompt,
+                        merge_mode=merge_mode,
+                        task_config=args.get("task_config"),
                         env_idx=0,
                         frequency=frequency,
                         task_env=task_env,
@@ -1137,6 +1182,8 @@ def robotwin_obs_to_xpolicylab(
     instruction: str | None = None,
     instructions: Sequence[str] | None = None,
     samples_per_prompt: int = 1,
+    merge_mode: str | None = None,
+    task_config: str | None = None,
     env_idx: int = 0,
     frequency: int = 30,
     task_env: Any | None = None,
@@ -1155,6 +1202,12 @@ def robotwin_obs_to_xpolicylab(
         "additional_info": {
             "frequency": int(frequency),
             "policy_batch_inference_size": int(samples_per_prompt),
+            # Absent unless a merge mode was asked for, so the policy keeps its
+            # stock denoising path by default.
+            **({"merge_mode": str(merge_mode)} if merge_mode else {}),
+            # Both splits reuse the same episode seeds, so a recorded call can
+            # only be attributed to one of them if the config travels with it.
+            "task_config": str(task_config or ""),
         },
     }
 
@@ -1476,6 +1529,21 @@ def parse_args() -> dict[str, Any]:
              "differ because pi0 samples its flow-matching noise per batch element.",
     )
     parser.add_argument(
+        "--merge_mode",
+        default=None,
+        help="Candidate-merge mode for the denoising loop. Unset (default) keeps the stock "
+             "sample_actions path. 'trace' records x0_hat every step for tau calibration; "
+             "'mergeD<k>_masking' collapses candidates onto their cluster medoid at step k.",
+    )
+    parser.add_argument(
+        "--step_limit_scale",
+        type=float,
+        default=None,
+        help="Scale the task's eval step limit. Only worth raising where successful "
+             "episodes already run close to the limit; elsewhere it just makes failures "
+             "take longer. Recorded in the run directory name.",
+    )
+    parser.add_argument(
         "--rephrase_select",
         choices=("random",),
         default=None,
@@ -1519,6 +1587,10 @@ def parse_args() -> dict[str, Any]:
         usr_args["rephrase_select"] = args.rephrase_select
     if args.policy_batch_inference_size is not None:
         usr_args["policy_batch_inference_size"] = args.policy_batch_inference_size
+    if args.step_limit_scale is not None:
+        usr_args["step_limit_scale"] = args.step_limit_scale
+    if args.merge_mode is not None:
+        usr_args["merge_mode"] = args.merge_mode
 
     usr_args.update(parse_additional_info(args.additional_info))
     usr_args.setdefault("ckpt_setting", usr_args.get("ckpt_name"))
