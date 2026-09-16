@@ -1,2 +1,0 @@
---task_config=demo_randomized
---test_num=50

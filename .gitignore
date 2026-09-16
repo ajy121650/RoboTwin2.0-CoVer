@@ -12,8 +12,10 @@ eval_video/
 *.bac
 doc/
 
-# eval result
-eval_result/
+# eval result. No trailing slash: these paths are symlinks to /work2 on this
+# host, and git sees a symlink as a file, which a directory pattern misses.
+eval_result
+analysis_result
 
 # Code Generation
 assets/*
