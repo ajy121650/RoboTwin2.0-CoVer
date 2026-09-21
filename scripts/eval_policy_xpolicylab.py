@@ -188,6 +188,19 @@ def resolve_step_limit_scale(args: dict[str, Any]) -> float:
         return 1.0
 
 
+def resolve_noise_std(args: dict[str, Any]) -> float:
+    """Std of the flow-matching start noise at inference; 1.0 is what training used.
+
+    A sampling temperature: larger values start the denoising ODE further from the
+    origin and spread the candidates. Recorded in the run directory name whenever it
+    departs from 1.0.
+    """
+    try:
+        return max(0.0, float(args.get("noise_std", 1.0) or 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def apply_step_limit_scale(task_env, args: dict[str, Any]) -> None:
     scale = resolve_step_limit_scale(args)
     if scale != 1.0 and getattr(task_env, "step_lim", None):
@@ -209,6 +222,7 @@ def build_run_tag(args: dict[str, Any], instruction_type: str | None, seed: Any,
             f"sel-{str(args.get('rephrase_select', 'random') or 'random').lower()}",
             *((f"merge-{str(args['merge_mode']).lower()}",) if args.get("merge_mode") else ()),
             *((f"lim{resolve_step_limit_scale(args):g}x",) if resolve_step_limit_scale(args) != 1.0 else ()),
+            *((f"std{resolve_noise_std(args):g}",) if resolve_noise_std(args) != 1.0 else ()),
             f"ep{test_num}",
         )
     )
@@ -359,6 +373,7 @@ def main(usr_args: dict[str, Any]) -> None:
     args["policy_batch_inference_size"] = resolve_batch_inference_size(usr_args)
     args["step_limit_scale"] = resolve_step_limit_scale(usr_args)
     args["merge_mode"] = usr_args.get("merge_mode")
+    args["noise_std"] = resolve_noise_std(usr_args)
 
     save_dir = build_eval_save_dir(
         task_name, policy_name, task_config, ckpt_setting, current_time,
@@ -433,6 +448,7 @@ def main_batch(usr_args: dict[str, Any]) -> None:
     args["policy_batch_inference_size"] = resolve_batch_inference_size(usr_args)
     args["step_limit_scale"] = resolve_step_limit_scale(usr_args)
     args["merge_mode"] = usr_args.get("merge_mode")
+    args["noise_std"] = resolve_noise_std(usr_args)
 
     save_dir = build_eval_save_dir(
         task_name, policy_name, task_config, ckpt_setting, current_time,
@@ -753,6 +769,7 @@ def run_one_batch_episode(
     instruction = instruction_set[0]
     samples_per_prompt = resolve_batch_inference_size(args)
     merge_mode = args.get("merge_mode")
+    noise_std = resolve_noise_std(args)
     task_env.set_instruction(instruction=instruction)
 
     if task_env.eval_video_path is not None:
@@ -796,6 +813,7 @@ def run_one_batch_episode(
                 instructions=instruction_set,
                 samples_per_prompt=samples_per_prompt,
                 merge_mode=merge_mode,
+                noise_std=noise_std,
                 task_config=args.get("task_config"),
                 env_idx=worker_id,
                 frequency=frequency,
@@ -827,6 +845,7 @@ def run_one_batch_episode(
                     instructions=instruction_set,
                     samples_per_prompt=samples_per_prompt,
                     merge_mode=merge_mode,
+                    noise_std=noise_std,
                     task_config=args.get("task_config"),
                     env_idx=worker_id,
                     frequency=frequency,
@@ -956,6 +975,7 @@ def eval_remote_policy(
         instruction = instruction_set[0]
         samples_per_prompt = resolve_batch_inference_size(args)
         merge_mode = args.get("merge_mode")
+        noise_std = resolve_noise_std(args)
         task_env.set_instruction(instruction=instruction)
 
         if task_env.eval_video_path is not None:
@@ -1001,6 +1021,7 @@ def eval_remote_policy(
                     instructions=instruction_set,
                     samples_per_prompt=samples_per_prompt,
                     merge_mode=merge_mode,
+                    noise_std=noise_std,
                     task_config=args.get("task_config"),
                     env_idx=0,
                     frequency=frequency,
@@ -1033,6 +1054,7 @@ def eval_remote_policy(
                         instructions=instruction_set,
                         samples_per_prompt=samples_per_prompt,
                         merge_mode=merge_mode,
+                        noise_std=noise_std,
                         task_config=args.get("task_config"),
                         env_idx=0,
                         frequency=frequency,
@@ -1183,6 +1205,7 @@ def robotwin_obs_to_xpolicylab(
     instructions: Sequence[str] | None = None,
     samples_per_prompt: int = 1,
     merge_mode: str | None = None,
+    noise_std: float = 1.0,
     task_config: str | None = None,
     env_idx: int = 0,
     frequency: int = 30,
@@ -1205,6 +1228,9 @@ def robotwin_obs_to_xpolicylab(
             # Absent unless a merge mode was asked for, so the policy keeps its
             # stock denoising path by default.
             **({"merge_mode": str(merge_mode)} if merge_mode else {}),
+            # Absent at 1.0 so a run that never asked for it sends exactly what
+            # it sent before.
+            **({"noise_std": float(noise_std)} if noise_std != 1.0 else {}),
             # Both splits reuse the same episode seeds, so a recorded call can
             # only be attributed to one of them if the config travels with it.
             "task_config": str(task_config or ""),
@@ -1544,6 +1570,14 @@ def parse_args() -> dict[str, Any]:
              "take longer. Recorded in the run directory name.",
     )
     parser.add_argument(
+        "--noise_std",
+        type=float,
+        default=None,
+        help="Std of the flow-matching start noise at inference (training used 1.0). "
+             "A sampling temperature for the candidates; recorded in the run directory "
+             "name when it differs from 1.0.",
+    )
+    parser.add_argument(
         "--rephrase_select",
         choices=("random",),
         default=None,
@@ -1591,6 +1625,8 @@ def parse_args() -> dict[str, Any]:
         usr_args["step_limit_scale"] = args.step_limit_scale
     if args.merge_mode is not None:
         usr_args["merge_mode"] = args.merge_mode
+    if args.noise_std is not None:
+        usr_args["noise_std"] = args.noise_std
 
     usr_args.update(parse_additional_info(args.additional_info))
     usr_args.setdefault("ckpt_setting", usr_args.get("ckpt_name"))
