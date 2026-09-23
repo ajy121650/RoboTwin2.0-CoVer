@@ -10,6 +10,37 @@
     "Lift {A} onto {B}."
   ],
   "unseen": [
-    "Set {A} on {B}."
+    "Set {A} on {B}.",
+    "Rest {A} on {B}.",
+    "Prop {A} up on {B}.",
+    "Seat {A} onto {B}.",
+    "Lower {A} onto {B}.",
+    "Place {A} into {B}.",
+    "Load {A} onto {B}.",
+    "Perch {A} on {B}.",
+    "Mount {A} on {B}.",
+    "Lean {A} against {B}.",
+    "Slot {A} into {B}.",
+    "Settle {A} onto {B}.",
+    "Park {A} on {B}.",
+    "Deposit {A} on {B}.",
+    "Lay {A} on {B}.",
+    "Position {A} on {B}.",
+    "Fit {A} onto {B}.",
+    "Stand {A} up on {B}.",
+    "Drop {A} onto {B}.",
+    "Balance {A} on {B}.",
+    "Use {a} to set {A} on {B}.",
+    "Let {a} place {A} onto {B}.",
+    "Have {a} rest {A} on {B}.",
+    "Pick up {A} and seat it on {B}.",
+    "Grab {A} and prop it on {B}.",
+    "Lift {A} and settle it onto {B}.",
+    "Take {A} and mount it on {B}.",
+    "Bring {A} across to {B}.",
+    "Carry {A} over and rest it on {B}.",
+    "Retrieve {A} and stand it on {B}.",
+    "Move {A} so it sits on {B}.",
+    "Guide {A} onto {B} with {a}."
   ]
 }
