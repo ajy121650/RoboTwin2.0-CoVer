@@ -84,11 +84,15 @@ class AttentionPooling(nn.Module):
 class ActionTransformerEncoder(nn.Module):
     """(B, W, D) padded windows -> (B, E). Padding rows carry `pad_value` in dim 0."""
 
-    def __init__(self, action_dim, embed_dim, num_layers=4, num_heads=8, dropout=0.1, pad_value=-5.0, window=50):
+    def __init__(self, action_dim, embed_dim, num_layers=4, num_heads=8, dropout=0.1, pad_value=-5.0, window=50,
+                 pos_emb=True):
         super().__init__()
         self.pad_value = pad_value
         self.step_encoder = nn.Linear(action_dim, embed_dim)
-        self.register_buffer("pos_emb", sincos_position_embedding(window, embed_dim))
+        # CoVer's encoder has no position embedding: with masked mean pooling it is
+        # permutation-invariant over the window. Keep pos_emb=False to reproduce that.
+        pe = sincos_position_embedding(window, embed_dim) if pos_emb else torch.zeros(window, embed_dim)
+        self.register_buffer("pos_emb", pe)
         layer = nn.TransformerEncoderLayer(embed_dim, num_heads, dim_feedforward=embed_dim * 2,
                                            dropout=dropout, batch_first=True)
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
@@ -128,6 +132,7 @@ class VerifierConfig:
     window: int = 50
     action_encoder: str = "transformer"       # or "mlp"
     action_layers: int = 4
+    action_pos_emb: bool = True               # False = CoVer (no position information in the window)
     action_dropout: float = 0.1
     pad_value: float = -5.0
     text_mask: bool = True
@@ -164,7 +169,8 @@ class Verifier(nn.Module):
         self.context_proj = nn.Linear(cfg.text_pool_dim + cfg.vision_pool_dim, cfg.vision_pool_dim)
         if cfg.action_encoder == "transformer":
             self.action_encoder = ActionTransformerEncoder(cfg.action_dim, cfg.vision_pool_dim, cfg.action_layers,
-                                                           cfg.pool_heads, cfg.action_dropout, cfg.pad_value, cfg.window)
+                                                           cfg.pool_heads, cfg.action_dropout, cfg.pad_value, cfg.window,
+                                                           pos_emb=cfg.action_pos_emb)
         else:
             self.action_encoder = ActionMLPEncoder(cfg.action_dim, cfg.vision_pool_dim, cfg.window, cfg.pad_value)
         self.logit_scale = nn.Parameter(torch.tensor(cfg.logit_scale_init))

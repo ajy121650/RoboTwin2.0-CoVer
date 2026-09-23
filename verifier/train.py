@@ -29,10 +29,13 @@ def set_nested(cfg, dotted, value):
     d[keys[-1]] = yaml.safe_load(value) if not isinstance(old, str) else value
 
 
-def info_nce(f, a, logit_scale, rank, world):
-    """Symmetric InfoNCE over embeddings gathered from every rank. Gradients flow
-    to the local rows only (the standard CLIP recipe)."""
-    if world > 1:
+def info_nce(f, a, logit_scale, rank, world, gather=False):
+    """Symmetric InfoNCE. With gather=False every rank scores only its own batch,
+    so the negative pool is batch_size - 1 whatever the GPU count -- CoVer's
+    setting. With gather=True embeddings from every rank are concatenated first
+    (negatives = batch_size * world - 1); gradients still flow to the local rows
+    only, the standard CLIP recipe."""
+    if gather and world > 1:
         f_all = torch.cat([g if i == rank else g.detach() for i, g in enumerate(all_gather_with_grad(f))])
         a_all = torch.cat([g if i == rank else g.detach() for i, g in enumerate(all_gather_with_grad(a))])
     else:
@@ -140,10 +143,13 @@ def main():
               f"steps/epoch {steps_per_epoch} (per rank) | total steps {total_steps} | val pairs {len(val_idx)}")
 
     # -- optim
-    decay = [p for p in params if p.ndim >= 2 and p.numel() > 1]
-    no_decay = [p for p in params if not (p.ndim >= 2 and p.numel() > 1)]   # biases, norms, scalars, queries
-    opt = torch.optim.AdamW([dict(params=decay, weight_decay=tr["weight_decay"]),
-                             dict(params=no_decay, weight_decay=0.0)], lr=tr["lr"], betas=(0.9, 0.98))
+    if tr.get("decay_all", False):            # CoVer: one AdamW group, everything decayed
+        opt = torch.optim.AdamW(params, lr=tr["lr"], weight_decay=tr["weight_decay"], betas=(0.9, 0.98))
+    else:
+        decay = [p for p in params if p.ndim >= 2 and p.numel() > 1]
+        no_decay = [p for p in params if not (p.ndim >= 2 and p.numel() > 1)]   # biases, norms, scalars, queries
+        opt = torch.optim.AdamW([dict(params=decay, weight_decay=tr["weight_decay"]),
+                                 dict(params=no_decay, weight_decay=0.0)], lr=tr["lr"], betas=(0.9, 0.98))
     warm = tr["warmup_steps"]
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / warm) * (0.5 * (1 + math.cos(math.pi * min(1.0, max(0, s - warm) / max(1, total_steps - warm))))))
@@ -180,7 +186,7 @@ def main():
             imgs = imgs.to(device, non_blocking=True); tokens = tokens.to(device); windows = windows.to(device)
             f, a = ddp_model(imgs, tokens, windows)
             scale = model.logit_scale.clamp(max=math.log(100)).exp()
-            loss, top1, top5, n_all = info_nce(f, a, scale, rank, world)
+            loss, top1, top5, n_all = info_nce(f, a, scale, rank, world, gather=tr.get("gather_negatives", False))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, tr["grad_clip"])

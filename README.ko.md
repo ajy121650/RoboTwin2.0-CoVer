@@ -22,7 +22,7 @@ verifier 학습에는 시뮬레이터, XPolicyLab 서브모듈, policy 체크포
 
 - 학습 방식: CoVer Level-0 — frozen SigLIP2 (ViT-L-16-384) 이미지·텍스트 타워 + 학습 가능한 head,
   (head 카메라 이미지, instruction) ↔ expert의 다음 50 step joint action 윈도우 사이의 대칭 InfoNCE.
-  negative는 in-batch(전 GPU all-gather)만 사용.
+  negative는 in-batch만 사용(기본은 CoVer처럼 GPU별 자기 배치 63개).
 - 데이터: `demo_clean` 50 task × 50 episode = 2,500 episode (Pi0.5 leaderboard 체크포인트의 학습셋과
   동일 — lerobot v30과 에피소드 단위로 일치 확인). stride 5, 프레임당 seen instruction 8개,
   task당 마지막 5 episode holdout, unseen instruction은 평가 전용.
@@ -114,7 +114,8 @@ torchrun --nproc_per_node 8 verifier/train.py \
     --set model.token_scale=none --set model.text_mask=false
 ```
 
-- 기본 설정(`verifier/configs/default.yaml`): GPU당 batch 64(전역 negative 512), lr 1e-5, 15 epoch,
+- 기본 설정(`verifier/configs/default.yaml`): GPU당 batch 64, negative는 CoVer와 같이 각 GPU의
+  자기 배치 63개(`train.gather_negatives: true`면 전 GPU all-gather), lr 1e-5, 15 epoch,
   warmup 2,000 step, task당 epoch 40,000 쌍 cap. 8 GPU 기준 epoch당 약 1,490 step.
 - 어떤 값이든 `--set train.lr=3e-5` 식으로 덮어쓸 수 있습니다. GPU 메모리가 작으면
   `--set train.batch_size=32`.
@@ -124,6 +125,15 @@ torchrun --nproc_per_node 8 verifier/train.py \
   정규화 통계가 들어 있어 추론에 다른 파일이 필요 없습니다.
 - 중단 후 이어서: 같은 명령에 `--resume` (epoch 내 위치까지 복원).
 - `cover_verifier_bridge.pt`는 `hf download cover-vla/cover-vla-bridge cover_verifier_bridge.pt`.
+
+**CoVer 원본 조건 재현** — `configs/cover.yaml`은 이 포트가 CoVer와 다르게 둔 것(negative gather,
+액션 인코더 위치 임베딩, `token_scale`, `text_mask`, weight decay 범위, lr)을 전부 CoVer 값으로
+되돌린 설정입니다. "CoVer를 in-domain으로 재학습한 baseline"은 이걸로, 수정판은 `default.yaml`로:
+
+```bash
+torchrun --nproc_per_node 8 verifier/train.py --config verifier/configs/cover.yaml \
+    --data /data/verifier_data/demo_clean_s5_w50 --out /data/verifier_ckpt/vitl_cover
+```
 
 빠른 동작 확인(작은 백본, 몇 step):
 

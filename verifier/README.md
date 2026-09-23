@@ -22,7 +22,10 @@ action history · head camera only · batch never holds two windows of one episo
 | `eval_offline.py` | holdout retrieval: global / same-task / same-episode pools, seen + unseen |
 | `configs/default.yaml` | the baseline run |
 
-Two departures from CoVer's heads, both switchable in `configs/default.yaml`:
+Every departure from CoVer is a switch, and `configs/cover.yaml` sets all of them back
+(no negative gathering, no action position embedding, `token_scale: none`,
+`text_mask: false`, decay on every parameter, lr 1e-6) for a faithful in-domain
+re-training baseline. The two head-side switches in `configs/default.yaml`:
 `text_mask: true` keeps pad tokens out of text pooling, and `token_scale: sqrt_dim`
 rescales the L2-normalised SigLIP2 tokens to unit per-dim scale. Without the latter
 the pooled context is input-independent at init (pairwise cosine 1.000 across
@@ -63,8 +66,9 @@ torchrun --nproc_per_node 8 verifier/train.py ... --set warm_start=/path/cover_v
 python verifier/train.py --set model.backbone=hf-hub:timm/ViT-B-16-SigLIP2-256 --set train.max_steps=3 --set train.batch_size=8 --out /tmp/smoke
 ```
 
-Per-GPU batch 64 → global 512 negatives (embeddings are all-gathered). One epoch over
-764k train pairs (cap 40k/task) ≈ 1,490 steps per rank at 8 GPUs. Logs: `out/log.jsonl`;
+Per-GPU batch 64 with 63 in-batch negatives per rank, as in CoVer
+(`train.gather_negatives: true` all-gathers embeddings instead, 64 × GPUs − 1 negatives).
+One epoch over 764k train pairs (cap 40k/task) ≈ 1,490 steps per rank at 8 GPUs. Logs: `out/log.jsonl`;
 `--resume` continues from `last.pt`; `--set train.wandb=true` for wandb.
 
 ## Evaluate
