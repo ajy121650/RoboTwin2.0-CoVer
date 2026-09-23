@@ -54,13 +54,6 @@
     "Use {a} to pick {B}, position it near {A}"
   ],
   "unseen": [
-    "Pick up {B} and move it near {A}",
-    "Grab {B} and set it beside {A}",
-    "Use {a} to grab {B} and place it by {A}",
-    "Pick up {B} and set it beside {A}",
-    "Grab {B} and move it near {A}",
-    "Grab {B} and place it near {A}",
-    "Use {a} to pick up {B} and move it beside {A}",
     "Grab {B} and place it beside {A}",
     "Use {a} to pick up {B}, move it near {A}",
     "Shift {B} over next to {A}",
@@ -69,7 +62,6 @@
     "Carry {B} across and park it by {A}",
     "Bring {B} alongside {A}",
     "Deposit {B} right next to {A}",
-    "Tuck {B} in beside {A}",
     "Station {B} adjacent to {A}",
     "Transfer {B} to a spot near {A}",
     "Nudge {B} over toward {A}",

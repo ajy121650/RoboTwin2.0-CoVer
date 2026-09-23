@@ -47,13 +47,8 @@
     "Take {A} from the table, rotate it, place it in the center, then hang it onto {B}."
   ],
   "unseen": [
-    "Grab {A} from the table, rotate it, and set it in the center. Then hang {A} on {B}.",
-    "Pick up {A}, rotate it, place it on the table, and hang it on {B}.",
-    "Grab {A}, turn it, set it on the table, then hang it on {B}.",
     "Lift {A}, rotate it, put it down, then attach it to {B}.",
-    "Pick {A} with the left arm, rotate, place it, then hang it on {B}.",
     "Lift {A} from the table, spin it, set it down, and hang it on {B}.",
-    "Grab {A} on the table, rotate it, set it down in the middle, then hang it onto {B}.",
     "Pick {A} from the table, rotate it, place it in the middle, and hang it onto {B}.",
     "Rotate {A} on the table, then mount it on {B}.",
     "Turn {A} around, set it down, and suspend it from {B}.",
@@ -61,11 +56,9 @@
     "Spin {A}, lower it, and slot it onto {B}.",
     "Reorient {A} mid-table before hooking it onto {B}.",
     "Swivel {A}, put it down, then fit it onto {B}.",
-    "Handle {A}: rotate, release, and finally hang on {B}.",
     "Adjust {A}'s orientation, then transfer it onto {B}.",
     "Rotate {A} between arms and finish by hanging on {B}.",
     "Twist {A} into position, set down, then mount on {B}.",
-    "Turn {A} over, place it mid-table, and hook onto {B}.",
     "Change {A}'s facing, then suspend it from {B}.",
     "Grip {A}, rotate, release, regrip, and hang it on {B}.",
     "Left hand rotates {A}; right hand hangs it on {B}.",
@@ -83,7 +76,6 @@
     "Rotate and reposition {A}, finishing with {B}.",
     "Set {A} down rotated, then lift it onto {B}.",
     "Spin {A}, swap hands, and mount it on {B}.",
-    "Rotate {A} mid-table before suspending it on {B}.",
     "Turn {A}, rest it, regrasp, and hang it on {B}.",
     "Swap arms after rotating {A}, then hang on {B}.",
     "Bring {A} to {B} after rotating it on the table."
