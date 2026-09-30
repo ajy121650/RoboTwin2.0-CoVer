@@ -16,6 +16,7 @@ action history · head camera only · batch never holds two windows of one episo
 |---|---|
 | `build_dataset.py` | `demo_clean/<task>/aloha_agilex/{data,instruction}` → sample tables (`actions.npy`, `samples.jsonl`, `instructions.json`, `unseen.json`, `norm_stats.json`, `images/`) |
 | `inspect_dataset.py` | statistics + contact sheet for a built set |
+| `cache_images.py` | pre-resized uint8 image cache so training does no CPU image work |
 | `model.py` | `Verifier` (heads ported from CoVer), `build()`, `load_cover_warm_start()` |
 | `data.py` | `VerifierDataset`, `EpisodeUniqueBatchSampler`, collate |
 | `train.py` | DDP training (torchrun), val every N steps, `best.pt`/`last.pt`/`epochNNN.pt` |
@@ -40,10 +41,14 @@ pip install -r verifier/requirements.txt          # torch 2.4+; pin transformers
 export HF_HOME=/big/disk/hf_cache                  # SigLIP2-L weights ~3.3 GB; required
 ```
 
-Data loading: images are stored as the original 320x240 JPEGs and decoded + resized
-to 384x384 in DataLoader workers (CPU) every step, like any CLIP training run; the
-frozen SigLIP2 forward and everything after it run on the GPU. Budget ~8 worker
-processes per GPU (`train.num_workers`). Resume (`--resume`) restarts at the
+Data loading: `python verifier/cache_images.py <dataset_dir>` pre-resizes every frame
+to the backbone's 384x384 into `images_384.u8.npy` (47 GB, bit-identical to the online
+preprocess); with it present (`image_cache: auto`) the loader only slices a memmap and
+the GPU does the normalisation, so `train.num_workers=2` is enough. Without the cache
+the original 320x240 JPEGs are decoded and resized in DataLoader workers every step
+(budget ~8 per GPU). Measured on one RTX 3090, ViT-L, batch 64: 0.62 s/step either
+way (the frozen SigLIP2 forward dominates), peak GPU memory 9.5 GB, host RAM 9.2 GB
+online with 8 workers vs 5.4 GB cached with 2. Resume (`--resume`) restarts at the
 beginning of the epoch recorded in `last.pt`.
 
 Copy only `verifier_data/demo_clean_s5_w50/` (1.9 GB); the hdf5 are not needed for

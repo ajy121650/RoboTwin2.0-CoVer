@@ -96,6 +96,17 @@ python verifier/inspect_dataset.py /data/verifier_data/demo_clean_s5_w50        
 
 기대 통계: frames 106,263 (train 95,543 / holdout 10,720), pairs 850,104, instructions 150,762.
 
+**이미지 사전 리사이즈 캐시 (권장)** — 학습 중 CPU 이미지 작업을 없앱니다. 데이터셋 폴더 안에
+`images_384.u8.npy` (47 GB, uint8 `(106263, 384, 384, 3)`)를 만들고, 학습은 이를 자동으로 사용합니다
+(`image_cache: auto`). 온라인 전처리와 비트 단위로 동일합니다. 32코어에서 약 2분:
+
+```bash
+python verifier/cache_images.py /data/verifier_data/demo_clean_s5_w50 --workers 32
+```
+
+캐시가 있으면 `--set train.num_workers=2`로 충분합니다(없으면 기본 8 유지). 디스크가 부족하면
+이 단계를 건너뛰어도 되고, 그 경우 JPEG 디코드·리사이즈를 DataLoader 워커가 수행합니다.
+
 ### 5. 학습
 
 ```bash
@@ -162,7 +173,7 @@ seen / unseen instruction 각각으로 보고합니다. (c)가 policy 후보 순
 | `transformers ... PyTorch >= 2.5 is required` | torch 2.4 + transformers 5.x 조합. `pip install "transformers<5"` |
 | `--data and --out are required` | 설정 파일에 경로가 없는 것이 정상. 두 인자를 명령줄에 지정 |
 | 첫 step까지 오래 걸림 | SigLIP2-L 3.3 GB 다운로드(rank 0가 먼저 받고 나머지가 대기). `HF_HOME` 디스크 확인 |
-| DataLoader가 병목 | JPEG 디코드+리사이즈는 CPU 워커에서 수행. `train.num_workers`(기본 8/GPU) 조정 |
+| DataLoader가 병목 | `cache_images.py`로 이미지 캐시를 만들면 CPU 이미지 작업이 없어짐. 캐시 없이 돌릴 땐 `train.num_workers`(기본 8/GPU) 조정 |
 | GPU 메모리 부족 | `--set train.batch_size=32` (negative 수도 절반이 됨) |
 
 ## 로컬(원본 서버) 참고

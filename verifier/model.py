@@ -185,12 +185,16 @@ class Verifier(nn.Module):
     @torch.no_grad()
     def _token_features(self, images, tokens):
         self.clip.eval()
+        if images.dtype == torch.uint8:                # pre-resized cache: normalise here, on the GPU
+            mean = torch.tensor(getattr(self.clip.visual, "image_mean", (0.5, 0.5, 0.5)), device=images.device)
+            std = torch.tensor(getattr(self.clip.visual, "image_std", (0.5, 0.5, 0.5)), device=images.device)
+            images = (images.float() / 255.0 - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
         self.clip.encode_image(images.to(torch.bfloat16), normalize=False)
         self.clip.encode_text(tokens, normalize=False)
-        patches = self._acts["img"]
+        patches = self._acts["img"]                 # (B, 576, 1024)
         if patches.shape[1] == self.num_patches + 1:
             patches = patches[:, 1:]
-        txt = self._acts["txt"]
+        txt = self._acts["txt"]                     # (B, 64, 1024)
         txt = self.clip.text.ln_final(txt)
         if getattr(self.clip.text, "text_projection", None) is not None:
             txt = self.clip.text.text_projection(txt)
@@ -217,6 +221,11 @@ class Verifier(nn.Module):
     def forward(self, images, tokens, windows):
         return self.encode_context(images, tokens), self.encode_actions(windows)
 
+    @property
+    def image_size(self) -> int:
+        size = getattr(self.clip.visual, "image_size", 384)
+        return size[0] if isinstance(size, (tuple, list)) else size
+
     def trainable_parameters(self):
         return [p for n, p in self.named_parameters() if p.requires_grad and not n.startswith("clip.")]
 
@@ -236,10 +245,13 @@ def build(cfg: VerifierConfig, hf_home: Optional[str] = None):
     HF hub; `hf_home` (or the HF_HOME env var, which wins) points the cache at a
     disk with room for the ~3.3 GB SigLIP2-L download."""
     import os
+
     if hf_home:
         os.environ.setdefault("HF_HOME", str(hf_home))
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
     import open_clip
+    
     clip_model, preprocess = open_clip.create_model_from_pretrained(cfg.backbone)
     tokenizer = open_clip.get_tokenizer(cfg.backbone)
     pad_id = getattr(clip_model.text, "pad_id", 0)

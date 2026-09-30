@@ -21,14 +21,17 @@ class VerifierDataset(Dataset):
     """
 
     def __init__(self, root, split="train", preprocess=None, instruction_source="seen",
-                 max_pairs_per_frame=None, seed=0):
+                 max_pairs_per_frame=None, seed=0, image_cache="auto", image_size=None):
         self.root = pathlib.Path(root)
         self.preprocess = preprocess
+        self.image_cache = self._open_image_cache(image_cache, image_size)
         self.meta = json.load(open(self.root / "meta.json"))
         self.norm = json.load(open(self.root / "norm_stats.json"))
         self.instructions = json.load(open(self.root / "instructions.json"))
         self.actions = np.load(self.root / "actions.npy", mmap_mode="r")
         recs = [json.loads(l) for l in open(self.root / "samples.jsonl")]
+        for row, r in enumerate(recs):
+            r["row"] = row                                # row in images_<S>.u8.npy
         self.frames = [r for r in recs if split in ("all", r["split"])]
         self.unseen = json.load(open(self.root / "unseen.json")) if instruction_source == "unseen" else None
         rng = random.Random(seed)
@@ -43,6 +46,24 @@ class VerifierDataset(Dataset):
                     self.pairs.append((fi, rng.choice(cands)))
         self.tasks = sorted({r["task"] for r in self.frames})
 
+    def _open_image_cache(self, mode, image_size):
+        """'auto' uses images_<S>.u8.npy when it exists and matches the backbone's
+        input size; a path forces that file; None/'none' decodes JPEGs online."""
+        if mode in (None, "none", False):
+            return None
+        if mode == "auto":
+            if image_size is None:
+                return None
+            path = self.root / f"images_{image_size}.u8.npy"
+            if not path.exists():
+                return None
+        else:
+            path = pathlib.Path(mode)
+        arr = np.load(path, mmap_mode="r")
+        if image_size is not None and arr.shape[1] != image_size:
+            raise ValueError(f"{path} holds {arr.shape[1]}px images, backbone wants {image_size}px")
+        return arr
+
     def __len__(self):
         return len(self.pairs)
 
@@ -53,9 +74,13 @@ class VerifierDataset(Dataset):
     def __getitem__(self, idx):
         fi, text = self.pairs[idx]
         r = self.frames[fi]
-        img = Image.open(self.root / "images" / r["image"]).convert("RGB")
-        if self.preprocess is not None:
-            img = self.preprocess(img)
+        if self.image_cache is not None:
+            # uint8 CHW; the model normalises on the GPU, so no CPU image work here
+            img = torch.from_numpy(np.array(self.image_cache[r["row"]])).permute(2, 0, 1)
+        else:
+            img = Image.open(self.root / "images" / r["image"]).convert("RGB")
+            if self.preprocess is not None:
+                img = self.preprocess(img)
         window = torch.from_numpy(np.asarray(self.actions[r["action_id"]], dtype=np.float32))
         return img, text, window, fi
 

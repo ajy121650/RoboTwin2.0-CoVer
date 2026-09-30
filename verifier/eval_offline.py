@@ -90,7 +90,8 @@ def main():
     ctx_len = model.clip.context_length
     report = dict(ckpt=a.ckpt, step=ck.get("step"), data=data)
     for src in ("seen", "unseen"):
-        ds = VerifierDataset(data, "holdout", preprocess, instruction_source=src, max_pairs_per_frame=1)
+        ds = VerifierDataset(data, "holdout", preprocess, instruction_source=src, max_pairs_per_frame=1,
+                             image_cache=ck["config"].get("image_cache", "auto"), image_size=model.image_size)
         if len(ds) == 0:
             print(f"[{src}] no holdout pairs (empty unseen.json?), skipped"); continue
         if a.max_frames and len(ds) > a.max_frames:

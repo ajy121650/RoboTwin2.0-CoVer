@@ -40,12 +40,17 @@ def info_nce(f, a, logit_scale, rank, world, gather=False):
         a_all = torch.cat([g if i == rank else g.detach() for i, g in enumerate(all_gather_with_grad(a))])
     else:
         f_all, a_all = f, a
+
     logits = logit_scale * f_all @ a_all.t()
     labels = torch.arange(len(f_all), device=f.device)
+
+    # F.cross_entropy는 NxN logit이 들어오면 label이 one-hot encoding 되어 있다 가정하고 축약된 길이 N의 label을 받음.
     loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.t(), labels)) / 2
+    
     with torch.no_grad():
         top1 = (logits.argmax(1) == labels).float().mean()
         top5 = (logits.topk(min(5, len(f_all)), dim=1).indices == labels[:, None]).any(1).float().mean()
+    
     return loss, top1, top5, len(f_all)
 
 
@@ -125,13 +130,18 @@ def main():
         if ddp else model)
 
     # -- data
-    train_ds = VerifierDataset(cfg["data"], "train", preprocess)
+    cache = cfg.get("image_cache", "auto")
+    train_ds = VerifierDataset(cfg["data"], "train", preprocess, image_cache=cache, image_size=model.image_size)
+    if is_main:
+        print("images: " + ("pre-resized uint8 cache (no CPU image work)" if train_ds.image_cache is not None
+                            else "JPEG decode + resize in DataLoader workers"))
     sampler = EpisodeUniqueBatchSampler(train_ds, tr["batch_size"], seed=tr["seed"], rank=rank, world_size=world,
                                         per_task_cap=tr.get("per_task_cap"))
     collate = make_collate(tokenizer, ctx_len)
     train_loader = DataLoader(train_ds, batch_sampler=sampler, num_workers=tr["num_workers"], collate_fn=collate,
                               pin_memory=True, persistent_workers=tr["num_workers"] > 0, prefetch_factor=4 if tr["num_workers"] > 0 else None)
-    val_ds = VerifierDataset(cfg["data"], "holdout", preprocess, max_pairs_per_frame=1)
+    val_ds = VerifierDataset(cfg["data"], "holdout", preprocess, max_pairs_per_frame=1,
+                             image_cache=cache, image_size=model.image_size)
     g = torch.Generator().manual_seed(tr["seed"])
     val_idx = torch.randperm(len(val_ds), generator=g)[: tr["val_pairs"]].tolist()
     val_loader = DataLoader(torch.utils.data.Subset(val_ds, val_idx), batch_size=tr["val_batch_size"], shuffle=False,

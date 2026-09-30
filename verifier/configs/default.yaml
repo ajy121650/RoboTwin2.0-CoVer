@@ -4,6 +4,7 @@
 data: null
 out: null
 hf_home: null
+image_cache: auto           # auto = use <data>/images_<S>.u8.npy if present (see cache_images.py); none = decode JPEGs online
 
 model:
   backbone: hf-hub:timm/ViT-L-16-SigLIP2-384
