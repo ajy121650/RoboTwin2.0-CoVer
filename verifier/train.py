@@ -139,10 +139,13 @@ def main():
                                         per_task_cap=tr.get("per_task_cap"))
     collate = make_collate(tokenizer, ctx_len)
     train_loader = DataLoader(train_ds, batch_sampler=sampler, num_workers=tr["num_workers"], collate_fn=collate,
-                              pin_memory=True, persistent_workers=tr["num_workers"] > 0, prefetch_factor=4 if tr["num_workers"] > 0 else None)
+                              pin_memory=True, persistent_workers=tr["num_workers"] > 0,
+                              prefetch_factor=tr.get("prefetch_factor", 4) if tr["num_workers"] > 0 else None)
     val_ds = VerifierDataset(cfg["data"], "holdout", preprocess, max_pairs_per_frame=1,
                              image_cache=cache, image_size=model.image_size)
-    g = torch.Generator().manual_seed(tr["seed"])
+    # The validation subset does not follow train.seed: runs that differ only in
+    # seed (ensemble members) are then scored on the same holdout pairs.
+    g = torch.Generator().manual_seed(tr.get("val_seed", 0))
     val_idx = torch.randperm(len(val_ds), generator=g)[: tr["val_pairs"]].tolist()
     val_loader = DataLoader(torch.utils.data.Subset(val_ds, val_idx), batch_size=tr["val_batch_size"], shuffle=False,
                             num_workers=tr["num_workers"] // 2, collate_fn=collate, pin_memory=True)
@@ -160,9 +163,16 @@ def main():
         no_decay = [p for p in params if not (p.ndim >= 2 and p.numel() > 1)]   # biases, norms, scalars, queries
         opt = torch.optim.AdamW([dict(params=decay, weight_decay=tr["weight_decay"]),
                                  dict(params=no_decay, weight_decay=0.0)], lr=tr["lr"], betas=(0.9, 0.98))
-    warm = tr["warmup_steps"]
-    sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lambda s: min(1.0, (s + 1) / warm) * (0.5 * (1 + math.cos(math.pi * min(1.0, max(0, s - warm) / max(1, total_steps - warm))))))
+    warm = int(tr.get("warmup_steps") or 0)            # 0 = no warmup: full lr from the first step
+    decay = tr.get("schedule", "cosine")                # "cosine" to zero, or "constant"
+
+    def lr_factor(s):
+        ramp = min(1.0, (s + 1) / warm) if warm > 0 else 1.0
+        if decay == "constant":
+            return ramp
+        return ramp * 0.5 * (1 + math.cos(math.pi * min(1.0, max(0, s - warm) / max(1, total_steps - warm))))
+
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_factor)
     step, epoch, best, batch_in_epoch = 0, 0, -1.0, 0
     if args.resume and (out / "last.pt").exists():
         ck = torch.load(out / "last.pt", map_location="cpu", weights_only=False)

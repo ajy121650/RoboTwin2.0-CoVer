@@ -20,6 +20,7 @@ model:
   action_pos_emb: true      # false = CoVer (no position information in the window)
   action_dropout: 0.1
   pad_value: -5.0
+  backbone_chunk: 256       # frozen towers are run in slices of this many samples
   text_mask: true
   token_scale: sqrt_dim     # "none" = CoVer scaling (use with warm_start)
 
@@ -37,6 +38,7 @@ train:
   grad_clip: 1.0
   per_task_cap: 40000       # pairs per task per epoch (median task ~12k pairs; caps the 4 biggest)
   num_workers: 8
+  prefetch_factor: 4        # batches each worker keeps ready; lower it for very large batches (RAM)
   seed: 0
   val_every: 500
   val_pairs: 4096           # holdout pairs used for the running validation

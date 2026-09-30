@@ -1,0 +1,59 @@
+# Large-batch schedule sized after the CoVer paper (Sec. 5.2: batch 32,768, 2k steps,
+# 16 epochs) and scaled to this dataset: 764k train pairs over 2,250 episodes.
+#
+#   batch 1024   the largest batch that still lets every epoch see ~97% of the pairs
+#                under the one-window-per-episode rule (2,048 would drop 37% per epoch)
+#   16 epochs    727 steps each = 11,632 steps; epochNNN.pt is written every epoch,
+#                so epochs 2 / 4 / 8 / 16 are all available for the ablation
+#   lr 1e-4      the paper does not state one; standard for large-batch contrastive heads
+#   seed         42 here; run 43 / 44 / 45 for the other ensemble members
+#
+# One run per GPU:
+#   CUDA_VISIBLE_DEVICES=0 python verifier/train.py --config verifier/configs/paper.yaml \
+#       --data <dataset> --out <ckpt>/seed42 --set train.seed=42
+data: null
+out: null
+hf_home: null
+image_cache: auto
+
+model:
+  backbone: hf-hub:timm/ViT-L-16-SigLIP2-384
+  text_pool_dim: 512
+  vision_pool_dim: 512
+  pool_heads: 8
+  pool_layers: 4
+  num_readouts: 1
+  action_dim: 14
+  window: 50
+  action_encoder: transformer
+  action_layers: 4
+  action_pos_emb: true
+  action_dropout: 0.1
+  pad_value: -5.0
+  backbone_chunk: 256
+  text_mask: true
+  token_scale: sqrt_dim
+
+warm_start: null
+
+train:
+  batch_size: 1024
+  gather_negatives: false
+  epochs: 16
+  lr: 1.0e-4
+  weight_decay: 0.05
+  decay_all: false
+  warmup_steps: 727         # 1 epoch of linear lr warmup (CoVer warms up, then holds lr)
+  schedule: constant        # as CoVer: lr stays at its peak after warmup ("cosine" decays to 0)
+  grad_clip: 1.0
+  per_task_cap: 40000
+  num_workers: 4
+  prefetch_factor: 2
+  seed: 42
+  val_every: 100
+  val_pairs: 4096
+  val_batch_size: 512
+  log_every: 10
+  max_steps: null
+  wandb: false
+  wandb_project: robotwin-verifier

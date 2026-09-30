@@ -143,6 +143,10 @@ class VerifierConfig:
     # logits stay cosines so its temperature keeps a gradient. "none" reproduces
     # CoVer exactly (required with a CoVer warm start).
     token_scale: str = "sqrt_dim"
+    # The frozen towers run without gradients, so a large batch is pushed through them
+    # in slices of this many samples; only the heads see the whole batch at once. This
+    # is what lets batch sizes in the thousands fit on one GPU.
+    backbone_chunk: int = 256
     logit_scale_init: float = 2.6592          # ln(1/0.07)
 
 
@@ -185,20 +189,27 @@ class Verifier(nn.Module):
     @torch.no_grad()
     def _token_features(self, images, tokens):
         self.clip.eval()
-        if images.dtype == torch.uint8:                # pre-resized cache: normalise here, on the GPU
-            mean = torch.tensor(getattr(self.clip.visual, "image_mean", (0.5, 0.5, 0.5)), device=images.device)
-            std = torch.tensor(getattr(self.clip.visual, "image_std", (0.5, 0.5, 0.5)), device=images.device)
-            images = (images.float() / 255.0 - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
-        self.clip.encode_image(images.to(torch.bfloat16), normalize=False)
-        self.clip.encode_text(tokens, normalize=False)
-        patches = self._acts["img"]                 # (B, 576, 1024)
-        if patches.shape[1] == self.num_patches + 1:
-            patches = patches[:, 1:]
-        txt = self._acts["txt"]                     # (B, 64, 1024)
-        txt = self.clip.text.ln_final(txt)
-        if getattr(self.clip.text, "text_projection", None) is not None:
-            txt = self.clip.text.text_projection(txt)
-        return F.normalize(patches.float(), dim=-1), F.normalize(txt.float(), dim=-1)
+        mean = torch.tensor(getattr(self.clip.visual, "image_mean", (0.5, 0.5, 0.5)), device=images.device)
+        std = torch.tensor(getattr(self.clip.visual, "image_std", (0.5, 0.5, 0.5)), device=images.device)
+        step = max(1, int(self.cfg.backbone_chunk))
+        patches_out, txt_out = [], []
+        for i in range(0, images.shape[0], step):
+            img = images[i:i + step]
+            if img.dtype == torch.uint8:               # pre-resized cache: normalise here, on the GPU
+                img = (img.float() / 255.0 - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
+            self.clip.encode_image(img.to(torch.bfloat16), normalize=False)
+            self.clip.encode_text(tokens[i:i + step], normalize=False)
+            patches = self._acts["img"]                 # (b, 576, 1024)
+            if patches.shape[1] == self.num_patches + 1:
+                patches = patches[:, 1:]
+            txt = self.clip.text.ln_final(self._acts["txt"])   # (b, 64, 1024)
+            if getattr(self.clip.text, "text_projection", None) is not None:
+                txt = self.clip.text.text_projection(txt)
+            # the patch tensor is the big one: hold it in bf16 until the heads need it
+            patches_out.append(F.normalize(patches.float(), dim=-1).to(torch.bfloat16))
+            txt_out.append(F.normalize(txt.float(), dim=-1))
+        self._acts.clear()
+        return torch.cat(patches_out).float(), torch.cat(txt_out)
 
     @property
     def token_value_scale(self) -> float:

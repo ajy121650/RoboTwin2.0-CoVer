@@ -137,6 +137,19 @@ torchrun --nproc_per_node 8 verifier/train.py \
 - 중단 후 이어서: 같은 명령에 `--resume` (epoch 내 위치까지 복원).
 - `cover_verifier_bridge.pt`는 `hf download cover-vla/cover-vla-bridge cover_verifier_bridge.pt`.
 
+**논문 규모 설정 (권장 본 학습)** — `configs/paper.yaml`: batch 1,024 · 16 epoch(727 step/epoch,
+총 11,632 step) · lr 1e-4 · warmup 1 epoch 후 lr 고정 · GPU 1장에 런 1개. 앙상블용으로 seed만 바꿔
+GPU마다 하나씩 띄웁니다. 매 epoch `epochNNN.pt`가 저장되므로 2/4/8/16 epoch 비교가 한 번의 런으로 됩니다.
+VRAM은 batch 1,024에서 약 20 GB(≈ 2 GB + 14.5 MB × batch, frozen backbone은 256장씩 나눠 통과).
+
+```bash
+for i in 0 1 2 3; do
+  CUDA_VISIBLE_DEVICES=$i nohup python verifier/train.py --config verifier/configs/paper.yaml \
+      --data /data/verifier_data/demo_clean_s5_w50 --out /data/verifier_ckpt/paper_seed4$((i+2)) \
+      --set train.seed=4$((i+2)) > /data/verifier_ckpt/paper_seed4$((i+2)).log 2>&1 &
+done
+```
+
 **CoVer 원본 조건 재현** — `configs/cover.yaml`은 이 포트가 CoVer와 다르게 둔 것(negative gather,
 액션 인코더 위치 임베딩, `token_scale`, `text_mask`, weight decay 범위, lr)을 전부 CoVer 값으로
 되돌린 설정입니다. "CoVer를 in-domain으로 재학습한 baseline"은 이걸로, 수정판은 `default.yaml`로:
