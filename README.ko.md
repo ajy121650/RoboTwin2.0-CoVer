@@ -45,22 +45,30 @@ cd RoboTwin2.0-CoVer
 
 ### 2. Python 환경
 
-Python 3.10, CUDA용 PyTorch 2.4 이상. 이 저장소가 검증된 조합:
+Python 3.10. **PyTorch는 GPU 세대에 맞는 빌드를 먼저 설치**합니다.
 
-```
-torch==2.4.1  torchvision==0.19.1  open_clip_torch==3.3.0  timm==1.0.30
-transformers==4.57.6  numpy==1.26.4  pillow==11.3.0  pyyaml==6.0.3
-```
+| GPU | PyTorch | 비고 |
+|---|---|---|
+| **Blackwell** (RTX PRO 6000 96GB, RTX 50xx) | **2.7.1 + cu128** | 2.4 계열은 이 세대를 지원하지 않음 (`no kernel image` / `sm_120` 오류). 드라이버 570+ 와 open 커널 모듈 이미지 필요 |
+| Ampere / Ada / Hopper (3090, A6000, 6000 Ada, A100, H100) | 2.7.1 + cu128 또는 2.4.1 + cu121 | 둘 다 동작 |
 
 ```bash
 conda create -n verifier python=3.10 -y && conda activate verifier
-# torch는 서버의 CUDA 버전에 맞는 휠로 먼저 설치 (예: cu121)
-pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
 pip install -r verifier/requirements.txt
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count(), torch.cuda.get_device_name(0))"
 ```
 
-주의: **torch < 2.5 이면 `transformers<5`** 를 유지해야 합니다(transformers 5.x는 torch 2.5+ 필요,
-`requirements.txt`에 이미 핀 되어 있음). torch 2.5+ 를 쓴다면 이 핀은 풀어도 됩니다.
+검증된 두 조합(나머지 패키지는 동일: open_clip_torch 3.3.0, timm 1.0.30, transformers 4.57.6):
+
+```
+torch 2.7.1  torchvision 0.22.1  numpy 2.2.6     ← 클라우드(Blackwell 포함)
+torch 2.4.1  torchvision 0.19.1  numpy 1.26.4    ← 원본 서버(RTX 3090, 드라이버 535)
+```
+
+같은 설정으로 두 버전을 돌려 loss가 소수 4자리까지 일치, 같은 체크포인트의 임베딩 cosine ≥ 0.99997,
+2.7에서 저장한 체크포인트를 2.4.1에서 그대로 로드, 이미지 캐시 재생성 결과도 픽셀 단위로 동일함을
+확인했습니다. `transformers<5` 핀은 어느 torch에서나 동작하므로 그대로 둡니다.
 
 ### 3. Hugging Face 캐시 위치
 
@@ -184,6 +192,8 @@ seen / unseen instruction 각각으로 보고합니다. (c)가 policy 후보 순
 | 증상 | 원인 / 조치 |
 |---|---|
 | `transformers ... PyTorch >= 2.5 is required` | torch 2.4 + transformers 5.x 조합. `pip install "transformers<5"` |
+| `no kernel image is available` / `sm_120 is not compatible` | Blackwell GPU에 torch 2.4 계열을 설치함. `torch==2.7.1` + cu128 로 재설치 |
+| `nvidia-smi`에 GPU가 안 보임 | Blackwell은 open 커널 모듈 드라이버가 필요. 이미지 이름에 `open`이 들어간 CUDA 12.8+ 이미지로 생성 |
 | `--data and --out are required` | 설정 파일에 경로가 없는 것이 정상. 두 인자를 명령줄에 지정 |
 | 첫 step까지 오래 걸림 | SigLIP2-L 3.3 GB 다운로드(rank 0가 먼저 받고 나머지가 대기). `HF_HOME` 디스크 확인 |
 | DataLoader가 병목 | `cache_images.py`로 이미지 캐시를 만들면 CPU 이미지 작업이 없어짐. 캐시 없이 돌릴 땐 `train.num_workers`(기본 8/GPU) 조정 |

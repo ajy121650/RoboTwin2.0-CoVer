@@ -1,4 +1,11 @@
-# verifier training / inference (torch 2.4+ works; pin transformers<5 on torch<2.5)
+# verifier training / inference.
+# Install torch FIRST from the wheel index that matches the GPU, then this file:
+#   Blackwell (RTX PRO 6000, RTX 50xx) needs torch >= 2.7 with CUDA 12.8:
+#     pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+#   Ampere / Ada / Hopper (3090, A6000, 6000 Ada, A100, H100) also run the older stack:
+#     pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+# Both were run end to end: same losses to 4 decimals, checkpoints load either way.
+# transformers<5 works with every torch >= 2.2 (5.x needs torch >= 2.5).
 torch>=2.4
 torchvision
 open_clip_torch>=3.0

@@ -37,7 +37,9 @@ tokens); with it the cosine starts at ~0.9. Set both to CoVer's values (`false`,
 ## Setup (cloud)
 
 ```bash
-pip install -r verifier/requirements.txt          # torch 2.4+; pin transformers<5 if torch<2.5
+# torch first, matching the GPU: Blackwell (RTX PRO 6000 / 50xx) needs 2.7+ with cu128
+pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+pip install -r verifier/requirements.txt          # also runs on torch 2.4.1+cu121 (pre-Blackwell GPUs)
 export HF_HOME=/big/disk/hf_cache                  # SigLIP2-L weights ~3.3 GB; required
 ```
 
